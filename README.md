@@ -48,6 +48,26 @@ iWildCam is also downloadable via scripts.
     └── losses.py
 ```
 
+## Setting up the conda environment
+
+```bash
+mkdir -p ~/miniconda3
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh
+bash ~/miniconda3/miniconda.sh -b -u -p /gscratch/stf/$USER/miniconda3
+rm -rf ~/miniconda3/miniconda.sh
+# you might have to close and reopen the terminal for conda command to be available
+conda create --prefix=/gscratch/scrubbed/$USER/ecologyenv python=3.10
+conda config --append envs_dirs /gscratch/scrubbed/$USER
+mkdir /gscratch/scrubbed/$USER
+cd /gscratch/scrubbed/$USER
+git clone git@github.com:emazuh/ecology-core.git
+cd ecology-core
+[emazuh@klone-login01 ecology-core]$ conda activate ecologyenv
+[emazuh@klone-login01 ecology-core]$ export PYTHONUTF8=1
+[emazuh@klone-login01 ecology-core]$ export PYTHONIOENCODING=utf-8
+(/gscratch/scrubbed/emazuh/ecologyenv) [emazuh@klone-login01 ecology-core]$
+pip install -r requirements.txt
+```
 
 ## Experiment Boundaries (IMPORTANT)
 
