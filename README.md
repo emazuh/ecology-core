@@ -69,6 +69,8 @@ cd ecology-core
 pip install -r requirements.txt
 ```
 
+After setting up the environment, you can follow the instructions in `notebooks/README.md` to start a jupyter notebook on Hyak and forward it to your local computer browser for exploration experiments.
+
 ## Experiment Boundaries (IMPORTANT)
 
 - Training logic lives in `training/`, `models/`, `hpo/`
