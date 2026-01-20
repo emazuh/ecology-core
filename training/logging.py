@@ -38,6 +38,7 @@ def log_optuna_importance_to_wandb(
     study,
     target_idx=0,
     wandb_project="mobilevit-adapter-ablation",
+    wandb_entity="ecology-multimodal-2026",
     study_name=None
 ):
     """
@@ -77,6 +78,7 @@ def log_optuna_importance_to_wandb(
     # Initialize WandB
     wandb.init(
         project=wandb_project,
+        entity=wandb_entity,
         name=run_name,
         reinit=True,
         config={
@@ -121,6 +123,7 @@ class GateLogger:
             self.counts = None
 
     def hook_fn(self, module, input, output):
+        print('calling hookfn')
         if output is None:
             return
         self.gate_outputs.append(output.detach())
@@ -131,15 +134,22 @@ class GateLogger:
     @torch.no_grad()
     def _update_affinity(self, gate_output, labels):
         """Optional: compute class affinity"""
+        print('_update_affinity gate_output', len(gate_output))
         if self.sum_logits is None:
             num_experts = gate_output.size(1)
+            print('self.num_classes', self.num_classes, 'num_experts', num_experts)
             self.sum_logits = torch.zeros(self.num_classes, num_experts, device=self.device)
             self.counts = torch.zeros(self.num_classes, device=self.device)
         
         for c in range(self.num_classes):
             mask = labels == c
+            print("gate_output:", gate_output.shape)
+            print("mask sum:", mask.sum().item())
+            print("summed:", gate_output[mask].sum(dim=0).shape)
+            print("buffer:", self.sum_logits[c].shape)
+
             if mask.any():
-                self.sum_logits[c] += gate_output[mask].sum(dim=0)
+                self.sum_logits[c] += gate_output[mask].sum(dim=(0, 2, 3)) # .sum(dim=0)
                 self.counts[c] += mask.sum()
 
     def get_mean_gates_per_block(self):
@@ -176,6 +186,7 @@ class GateLogger:
         return affinity.cpu().numpy()
 
     def log_to_wandb(self, step=0, prefix="gates"):
+        print('called log_to_wandb')
         # Entropy
         entropies = self.compute_entropy()
         for idx, e in enumerate(entropies):
@@ -183,19 +194,24 @@ class GateLogger:
 
         # Class affinity
         if self.num_classes is not None:
+            print('num_classes is not None')
             affinity = self.compute_affinity()
             if affinity is not None:
+                print('affinity is not None')
                 plt.figure(figsize=(8, 6))
                 ax = sns.heatmap(affinity.T, annot=False, cmap='viridis')
                 plt.title("Class-Expert Affinity")
                 wandb.log({f"{prefix}/affinity_map": wandb.Image(plt)}, step=step)
                 plt.close()
+                print('logged affinity map')
 
         # Histogram
         if self.log_histogram:
+            print('log_histogram is not True')
             all_gates = torch.cat(self.gate_outputs, dim=0).cpu().numpy()
             plt.figure(figsize=(8, 4))
             plt.hist(all_gates.flatten(), bins=64)
             plt.title("Gate Activation Histogram")
             wandb.log({f"{prefix}/histogram": wandb.Image(plt)}, step=step)
             plt.close()
+            print('logged gates histogram')

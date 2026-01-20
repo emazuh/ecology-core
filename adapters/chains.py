@@ -186,7 +186,10 @@ class ChainSequential(nn.Module):
         self.gates = nn.ParameterList()
         self.scales = nn.ParameterList()
         print('[INFO]: Using ChainSequential')
-        if args is not None: self._args = args
+        if args is not None: 
+            # No extra dictionaries when deploying
+            if (not hasattr(args, 'deploy')) or (hasattr(args, 'deploy') and not args.deploy):
+                self._args = args
         for b in range(num_blocks):
             # if args.adapter_type == "simple":
             #     print('[INFO]: Using conv adapter experts')
@@ -236,7 +239,10 @@ class ChainParallelFixed(nn.Module):
         self.blocks = nn.ModuleList()
         self.gates = nn.ParameterList()
         self.scales = nn.ParameterList()
-        if args is not None: self._args = args
+        if args is not None: 
+            # No extra dictionaries when deploying
+            if (not hasattr(args, 'deploy')) or (hasattr(args, 'deploy') and not args.deploy):
+                self._args = args
         print('[INFO]: Using ChainParallelFixed')
         for b in range(num_blocks):
             # if args.adapter_type == "simple":
@@ -272,7 +278,7 @@ class ChainParallelFixed(nn.Module):
         if hasattr(self, '_args'):
             ent_value = getattr(self._args, 'entropy_coeff', 1e-4) * gate_entropy(self.gates)
             # print('self.gates', self.gates[0])
-            if not hasattr(self._args, 'gates_ent_loss'): self._args.gates_ent_loss = torch.tensor(0)
+            if not hasattr(self._args, 'gates_ent_loss'): self._args.gates_ent_loss = 0.0 # torch.tensor(0)
             self._args.gates_ent_loss -= ent_value # maximize entropy
 #             print('ent_value', ent_value, gates)
             
@@ -294,7 +300,10 @@ class ChainParallelInputDependent(nn.Module):
         self.blocks = nn.ModuleList()
         self.adapter_gates = nn.ModuleList()
         self.scales = nn.ParameterList()
-        if args is not None: self._args = args
+        if args is not None: 
+            # No extra dictionaries when deploying
+            if (not hasattr(args, 'deploy')) or (hasattr(args, 'deploy') and not args.deploy):
+                self._args = args
         print('[INFO]: Using ChainParallelInputDependent')
         for b in range(num_blocks):
             # block_experts = nn.ModuleList([ConvAdapter(in_channels, in_channels) for _ in range(experts_per_block[b])])
@@ -348,7 +357,10 @@ class ChainSequentialInputDependent(nn.Module):
         self.blocks = nn.ModuleList()
         self.adapter_gates = nn.ModuleList()
         self.scales = nn.ParameterList()
-        if args is not None: self._args = args
+        if args is not None: 
+            # No extra dictionaries when deploying
+            if (not hasattr(args, 'deploy')) or (hasattr(args, 'deploy') and not args.deploy):
+                self._args = args
         print('[INFO]: Using ChainSequentialInputDependent')
         for b in range(num_blocks):
             # Each block has multiple experts
@@ -386,7 +398,7 @@ class ChainSequentialInputDependent(nn.Module):
                     p = gates / (gates.sum(dim=1, keepdim=True) + 1e-8)
                     batch_ent = -(p * torch.log(p + 1e-8)).sum(dim=1).mean()                
                     ent_value = getattr(self._args, 'entropy_coeff', 1e-4) * batch_ent
-                    if not hasattr(self._args, 'gates_ent_loss'): self._args.gates_ent_loss = torch.tensor(0)
+                    if not hasattr(self._args, 'gates_ent_loss'): self._args.gates_ent_loss = 0.0 # torch.tensor(0)
                     self._args.gates_ent_loss -= ent_value # maximize entropy
                     
                 gates = gates.unsqueeze(-1).unsqueeze(-1)  # [B, num_experts, 1, 1]

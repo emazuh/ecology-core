@@ -1,0 +1,7 @@
+,run_id,val_acc,submodel_key,chain_type,adapter_type,input_dependent_gating,B5_adapters,B6_adapters,dataset,model
+0,zjnedpqq,0.7175,"(('chain_type', 'seq'), ('adapter_type', 'simple'), ('input_dependent_gating', True))",seq,simple,True,1,8,rare_species,mobilevit
+1,633mqtzi,0.711,"(('chain_type', 'seq_input'), ('adapter_type', 'simple'), ('input_dependent_gating', True))",seq_input,simple,True,2,4,rare_species,mobilevit
+2,k6xhdblt,0.7105,"(('chain_type', 'seq_input'), ('adapter_type', 'simple'), ('input_dependent_gating', True))",seq_input,simple,True,2,4,rare_species,mobilevit
+3,snlouagi,0.71,"(('chain_type', 'seq_input'), ('adapter_type', 'bottleneck'), ('input_dependent_gating', True))",seq_input,bottleneck,True,2,4,rare_species,mobilevit
+4,re3df193,0.709,"(('chain_type', 'seq_input'), ('adapter_type', 'simple'), ('input_dependent_gating', True))",seq_input,simple,True,8,4,rare_species,mobilevit
+5,echnfdki,0.703,"(('chain_type', 'seq'), ('adapter_type', 'bottleneck'), ('input_dependent_gating', True))",seq,bottleneck,True,8,4,rare_species,mobilevit

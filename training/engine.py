@@ -15,6 +15,7 @@ script_directory = os.path.dirname(os.path.realpath(__file__))
 import sys
 sys.path.insert(0, os.path.join(script_directory, '..'))
 from models.models_utils import save_trial_model
+from adapters.chains import ChainParallelFixed
 
 def run_one_epoch(model, loader, optimizer, scheduler, args, epoch, train=True, gate_logger=None):
     model.train() if train else model.eval()
@@ -33,7 +34,17 @@ def run_one_epoch(model, loader, optimizer, scheduler, args, epoch, train=True, 
 
         if train:
             optimizer.zero_grad()
-        args.gates_ent_loss = 0
+
+        if gate_logger:
+            for name, module in model.named_modules():
+                # print(name, type(module))
+                if isinstance(module, ChainParallelFixed):
+                    module.register_forward_hook(gate_logger.hook_fn)
+            
+            # for logging expert gate information
+            gate_logger.reset()
+            args.gates_ent_loss = 0 # reset before forward
+            gate_logger.current_labels = y
 
         # ----- video flatten -----
         is_video = (X.ndim == 5)
@@ -92,7 +103,14 @@ def run_one_epoch(model, loader, optimizer, scheduler, args, epoch, train=True, 
                 else:
                     wandb.log({'lr': optimizer.param_groups[0]["lr"]}, commit=False)
                     # print('optimizer.param_groups[0]["lr"]', optimizer.param_groups[0]["lr"])
-
+        else:
+            # Update affinity logger during validation
+            if gate_logger: #  and gate_logger.gate_outputs:
+                # outputs here should be per-expert logits
+                for block_gates in gate_logger.gate_outputs:
+                    gate_logger._update_affinity(block_gates, y)
+        
+        
         # stats
         total_loss += loss.item() * y.size(0)
         correct += (logits.argmax(1) == y).sum().item()
@@ -105,6 +123,13 @@ def run_one_epoch(model, loader, optimizer, scheduler, args, epoch, train=True, 
     avg_entropy = [] # torch.tensor(entropy_values).float().mean().item() # .detach()
 
     if train and args.ds_grad_norm_file: aggregate_epoch_grad_norms(args, batch_grad_norms)
+
+    if args.log_wandb:
+        # Compute and log affinity once per epoch
+        if gate_logger: print('gate_outputs', len(gate_logger.gate_outputs))
+        if gate_logger and gate_logger.gate_outputs:
+            print('calling log_to_wandb')
+            gate_logger.log_to_wandb(step=epoch, prefix="val_routing")
     return avg_loss, avg_acc, avg_entropy
 
 
@@ -120,7 +145,7 @@ def train_and_eval(model, train_loader, val_loader, args, run_test=False, trial=
 
     best_val = 0
     
-    gate_logger = GateLogger()
+    gate_logger = GateLogger(num_classes=args.num_classes, log_histogram=True)
 
     # Optional subset loader
     subset_loader = build_subset_loader(val_loader, samples_per_class=args.val_samples_per_class)

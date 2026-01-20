@@ -52,7 +52,8 @@ def objective_general(trial, seed=42, epochs=20, data_subset=0.1, dataset_name="
 
     if log_wandb:
         wandb.init(
-            project="mobilevit-adapter-ablation",
+            entity="ecology-multimodal-2026",
+            project="ecology-vision-moe",
             reinit=True,
             config={
                 "lr": round(lr, 4),
@@ -94,10 +95,10 @@ def objective_mlp(trial, adapter_cfg, seed=42, epochs=20, data_subset=0.1, datas
     hp["B6_adapters"] = 1
     hp["freeze_backbone"] = False # True
     
-    mlp_reduction = trial.suggest_categorical("mlp_reduction", [1, 2, 4, 8, 16, 32, 64])
+    mlp_reduction = 2 if trial is None else trial.suggest_categorical("mlp_reduction", [1, 2, 4, 8, 16, 32, 64])
     hp["mlp_reduction"] = mlp_reduction
     
-    batch_size = hp["batch_size"]
+    batch_size = 16 #  hp["batch_size"]
     if ds_grad_norm_file: 
         batch_size = 16
     # else:
@@ -122,12 +123,16 @@ def objective_mlp(trial, adapter_cfg, seed=42, epochs=20, data_subset=0.1, datas
     args.log_wandb = log_wandb
     args.mlp_reduction = mlp_reduction
     
+    args.adapter_type = "simple"
+    args.adapter_start_epoch = 2
+    
     args.ds_grad_norm_file = ds_grad_norm_file
     args.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if log_wandb:
         wandb.init(
-            project="mobilevit-adapter-ablation",
+            entity="ecology-multimodal-2026",
+            project="ecology-vision-moe",
             reinit=True,
             config={
                 "lr": round(lr, 4),
@@ -229,7 +234,8 @@ def objective_adapter_layers(trial, adapter_cfg, seed=42, epochs=20, data_subset
     # backbone_mlp_reduction3 tag for b5/b6 adapter experts fan out
     if log_wandb:
         wandb.init(
-            project="mobilevit-adapter-ablation",
+            entity="ecology-multimodal-2026",
+            project="ecology-vision-moe",
             reinit=True,
             config={
                 "lr": round(lr, 4),
@@ -302,7 +308,8 @@ def objective(trial, *, epochs, model_name, unfreeze_layers, adapter_cfg: Adapte
     os.environ["CUDA_VISIBLE_DEVICES"] = str(trial.number % 2)
 
     wandb.init(
-        project="mobilevit-adapter-ablation",
+        entity="ecology-multimodal-2026",
+        project="ecology-vision-moe",
         reinit=True,
         config={**hp, "model": model_name},
         settings=wandb.Settings(start_method="thread")
