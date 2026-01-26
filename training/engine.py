@@ -15,13 +15,14 @@ script_directory = os.path.dirname(os.path.realpath(__file__))
 import sys
 sys.path.insert(0, os.path.join(script_directory, '..'))
 from models.models_utils import save_trial_model
-from adapters.chains import ChainParallelFixed
+
 
 def run_one_epoch(model, loader, optimizer, scheduler, args, epoch, train=True, gate_logger=None):
     model.train() if train else model.eval()
 
     total_loss, correct, total = 0, 0, 0
     entropy_values = []
+    if gate_logger: gate_logger.reset()
     # iter_per_epoch = len(loader)
     iter_per_epoch = math.ceil(len(loader.dataset)/args.batch_size)
 
@@ -35,16 +36,12 @@ def run_one_epoch(model, loader, optimizer, scheduler, args, epoch, train=True, 
         if train:
             optimizer.zero_grad()
 
+        args.gates_ent_loss = 0 # reset before forward
+        args.gate_logger = gate_logger
         if gate_logger:
-            for name, module in model.named_modules():
-                # print(name, type(module))
-                if isinstance(module, ChainParallelFixed):
-                    module.register_forward_hook(gate_logger.hook_fn)
-            
             # for logging expert gate information
-            gate_logger.reset()
-            args.gates_ent_loss = 0 # reset before forward
             gate_logger.current_labels = y
+            # gate_logger.register_hooks(model)
 
         # ----- video flatten -----
         is_video = (X.ndim == 5)
@@ -66,7 +63,7 @@ def run_one_epoch(model, loader, optimizer, scheduler, args, epoch, train=True, 
         if hasattr(args, 'adapter_start_epoch') and epoch >= args.adapter_start_epoch:
             if hasattr(args, 'gates_ent_loss'): 
                 entropy_value = args.gates_ent_loss
-                loss += entropy_value
+                loss += entropy_value # TODO: Fix detached second backward pass problem
                 # print('entropy_value', -entropy_value, getattr(args, 'entropy_coeff', 1e-4))
                 # Log entropy per block to W&B
                 if args.log_wandb and train:
@@ -103,12 +100,13 @@ def run_one_epoch(model, loader, optimizer, scheduler, args, epoch, train=True, 
                 else:
                     wandb.log({'lr': optimizer.param_groups[0]["lr"]}, commit=False)
                     # print('optimizer.param_groups[0]["lr"]', optimizer.param_groups[0]["lr"])
-        else:
-            # Update affinity logger during validation
-            if gate_logger: #  and gate_logger.gate_outputs:
-                # outputs here should be per-expert logits
-                for block_gates in gate_logger.gate_outputs:
-                    gate_logger._update_affinity(block_gates, y)
+        # else:
+        #     # Update affinity logger during validation
+        #     if gate_logger: #  and gate_logger.gate_outputs:
+        #         # outputs here should be per-expert logits
+        #         for layer_idx, gate_output in gate_logger.gate_outputs:
+        #             gate_logger._update_affinity(gate_output, y, layer_idx)
+        #             # pass
         
         
         # stats
@@ -126,7 +124,9 @@ def run_one_epoch(model, loader, optimizer, scheduler, args, epoch, train=True, 
 
     if args.log_wandb:
         # Compute and log affinity once per epoch
-        if gate_logger: print('gate_outputs', len(gate_logger.gate_outputs))
+        if gate_logger: 
+            print('gate_outputs', len(gate_logger.gate_outputs))
+            # gate_logger.remove_hooks()
         if gate_logger and gate_logger.gate_outputs:
             print('calling log_to_wandb')
             gate_logger.log_to_wandb(step=epoch, prefix="val_routing")

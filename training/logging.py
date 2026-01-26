@@ -8,7 +8,11 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+from adapters.chains import ChainParallelFixed
 
+GATE_MODULES = (
+    ChainParallelFixed
+)
 
 def log_train_metrics(epoch, loss, acc, lr):
     wandb.log({
@@ -102,116 +106,123 @@ def log_optuna_importance_to_wandb(
     print(f"✅ Logged study-level importances for {study_name} (objective {target_idx})")
     return importances, best_trial
 
+import torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import seaborn as sns
+import wandb
+from collections import defaultdict
+
+
 class GateLogger:
-    def __init__(self, num_classes=None, log_histogram=False, device='cuda'):
-        """
-        num_classes: If provided, will compute class-wise affinity.
-        log_histogram: Whether to log a histogram of gate activations.
-        """
+    def __init__(self, num_classes=None, log_histogram=False, device="cuda"):
         self.num_classes = num_classes
         self.log_histogram = log_histogram
         self.device = device
-        # Initialize affinity tracking
-        self.sum_logits = None
-        self.counts = None
         self.reset()
 
     def reset(self):
-        self.gate_outputs = []
-        if self.num_classes is not None:
-            self.sum_logits = None
-            self.counts = None
+        # block_idx -> list of tensors ([E] or [B,E])
+        self.gate_outputs = defaultdict(list)
 
-    def hook_fn(self, module, input, output):
-        print('calling hookfn')
-        if output is None:
-            return
-        self.gate_outputs.append(output.detach())
-        # Only update affinity if labels are available
-        if self.num_classes is not None and hasattr(self, "current_labels"):
-            self._update_affinity(output, self.current_labels)
+        # block_idx -> [num_classes, E]
+        self.sum_logits = {} if self.num_classes is not None else None
+        self.counts = {} if self.num_classes is not None else None
 
+    # ------------------------------------------------
+    # Recording API (called from forward())
+    # ------------------------------------------------
     @torch.no_grad()
-    def _update_affinity(self, gate_output, labels):
-        """Optional: compute class affinity"""
-        print('_update_affinity gate_output', len(gate_output))
-        if self.sum_logits is None:
-            num_experts = gate_output.size(1)
-            print('self.num_classes', self.num_classes, 'num_experts', num_experts)
-            self.sum_logits = torch.zeros(self.num_classes, num_experts, device=self.device)
-            self.counts = torch.zeros(self.num_classes, device=self.device)
+    def record(self, block_idx, gates, labels=None):
+        """
+        gates:
+            fixed: [E]
+            input-dependent: [B, E]
+        labels: [B] or None
+        """
+        gates = gates.detach().to(self.device)
+
+        # normalize shape → [B, E]
+        if gates.dim() == 1:
+            gates = gates.unsqueeze(0)
+
+        self.gate_outputs[block_idx].append(gates.cpu())
+
+        if self.num_classes is not None and labels is not None:
+            self._update_affinity(block_idx, gates, labels)
+
+    # ------------------------------------------------
+    # Affinity
+    # ------------------------------------------------
+    @torch.no_grad()
+    def _update_affinity(self, block_idx, gates, labels):
+        # gates: [B, E]
+        B, E = gates.shape
+
+        if B == 1:
+            # no affinity for fixed gates
+            return
+
+        if block_idx not in self.sum_logits:
+            self.sum_logits[block_idx] = torch.zeros(
+                self.num_classes, E, device=self.device
+            )
+            self.counts[block_idx] = torch.zeros(
+                self.num_classes, device=self.device
+            )
+
+        # print("unique labels seen:", labels.unique())
         
         for c in range(self.num_classes):
             mask = labels == c
-            print("gate_output:", gate_output.shape)
-            print("mask sum:", mask.sum().item())
-            print("summed:", gate_output[mask].sum(dim=0).shape)
-            print("buffer:", self.sum_logits[c].shape)
-
             if mask.any():
-                self.sum_logits[c] += gate_output[mask].sum(dim=(0, 2, 3)) # .sum(dim=0)
-                self.counts[c] += mask.sum()
-
-    def get_mean_gates_per_block(self):
-        mean_gates_per_block = []
-        for b_idx in range(len(self.gate_outputs)):
-            block_gates = self.gate_outputs[b_idx]
-            if isinstance(block_gates, (list, tuple)):
-                # concatenate along batch dimension
-                block_gates_cat = torch.cat(block_gates, dim=0)
-            else:
-                # already a single tensor
-                block_gates_cat = block_gates
-            mean_gates_per_block.append(block_gates_cat.mean(0))
-        return mean_gates_per_block
-    
-    def compute_entropy(self):
-        """Compute batch-wise entropy for each gate output"""
-        entropies = []
-        for g in self.gate_outputs:
-            p = F.softmax(g, dim=1)  # [B, num_experts]
-            ent = -(p * torch.log(p + 1e-8)).sum(dim=1).mean()  # mean entropy over batch
-            entropies.append(ent.item())
-        return entropies
+                self.sum_logits[block_idx][c] += gates[mask].sum(dim=0)
+                self.counts[block_idx][c] += mask.sum()
 
     def compute_affinity(self, normalize=True):
-        if self.num_classes is None or self.sum_logits is None:
+        if self.num_classes is None:
             return None
-        affinity = self.sum_logits.clone()
-        valid = self.counts > 0
-        affinity[valid] /= self.counts[valid].unsqueeze(1)
-        if normalize:
-            row_sums = affinity.sum(dim=1, keepdim=True) + 1e-8
-            affinity = affinity / row_sums
-        return affinity.cpu().numpy()
 
+        affinities = {}
+        for b in self.sum_logits:
+            A = self.sum_logits[b].clone()
+            counts = self.counts[b]
+
+            valid = counts > 0
+            A[valid] /= counts[valid].unsqueeze(1)
+
+            if normalize:
+                A = A / (A.sum(dim=1, keepdim=True) + 1e-8)
+
+            affinities[b] = A.cpu().numpy()
+        return affinities
+
+    # ------------------------------------------------
+    # Logging
+    # ------------------------------------------------
     def log_to_wandb(self, step=0, prefix="gates"):
-        print('called log_to_wandb')
-        # Entropy
-        entropies = self.compute_entropy()
-        for idx, e in enumerate(entropies):
-            wandb.log({f"{prefix}/entropy_block_{idx}": e}, step=step)
-
-        # Class affinity
-        if self.num_classes is not None:
-            print('num_classes is not None')
-            affinity = self.compute_affinity()
-            if affinity is not None:
-                print('affinity is not None')
-                plt.figure(figsize=(8, 6))
-                ax = sns.heatmap(affinity.T, annot=False, cmap='viridis')
-                plt.title("Class-Expert Affinity")
-                wandb.log({f"{prefix}/affinity_map": wandb.Image(plt)}, step=step)
-                plt.close()
-                print('logged affinity map')
-
-        # Histogram
+        # ---------- Histogram (per block) ----------
         if self.log_histogram:
-            print('log_histogram is not True')
-            all_gates = torch.cat(self.gate_outputs, dim=0).cpu().numpy()
-            plt.figure(figsize=(8, 4))
-            plt.hist(all_gates.flatten(), bins=64)
-            plt.title("Gate Activation Histogram")
-            wandb.log({f"{prefix}/histogram": wandb.Image(plt)}, step=step)
-            plt.close()
-            print('logged gates histogram')
+            for b, gate_list in self.gate_outputs.items():
+                values = torch.cat([g.flatten() for g in gate_list])
+                plt.figure(figsize=(6, 4))
+                plt.hist(values.numpy(), bins=64)
+                plt.title(f"Gate Histogram – Block {b}")
+                wandb.log(
+                    {f"{prefix}/hist_block_{b}": wandb.Image(plt)},
+                    step=step
+                )
+                plt.close()
+
+        # ---------- Affinity ----------
+        if self.num_classes is not None:
+            affinities = self.compute_affinity()
+            for b, A in affinities.items():
+                plt.figure(figsize=(6, 5))
+                sns.heatmap(A.T, cmap="viridis")
+                plt.title(f"Class–Expert Affinity – Block {b}")
+                wandb.log(
+                    {f"{prefix}/affinity_block_{b}": wandb.Image(plt)},
+                    step=step
+                )
+                plt.close()

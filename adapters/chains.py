@@ -212,10 +212,17 @@ class ChainSequential(nn.Module):
                 gate = torch.sigmoid(self.gates[b_idx][e_idx])
                 block_out = block_out + gate * expert(out)
             out = out + self.scales[b_idx] * block_out
+
+            if hasattr(self, "_args") and hasattr(self._args, "gate_logger") and self._args.gate_logger:
+                self._args.gate_logger.record(
+                    block_idx=b_idx,
+                    gates=torch.sigmoid(self.gates[b_idx]),
+                    labels=getattr(self._args.gate_logger, "current_labels", None)
+                )
             
         if hasattr(self, '_args'):
             ent_value = getattr(self._args, 'entropy_coeff', 1e-4) * gate_entropy(self.gates)
-            if not hasattr(self._args, 'gates_ent_loss'): self._args.gates_ent_loss = torch.tensor(0)
+            if not hasattr(self._args, 'gates_ent_loss'): self._args.gates_ent_loss = 0.0 # torch.tensor(0)
             self._args.gates_ent_loss -= ent_value # maximize entropy
 
             if not hasattr(self._args, 'gate_values'):
@@ -245,14 +252,6 @@ class ChainParallelFixed(nn.Module):
                 self._args = args
         print('[INFO]: Using ChainParallelFixed')
         for b in range(num_blocks):
-            # if args.adapter_type == "simple":
-            #     print('[INFO]: Using conv adapter experts')
-            #     block_experts = nn.ModuleList([ConvAdapter(in_channels, in_channels) for _ in range(experts_per_block[b])])
-            # elif args.adapter_type == "fourier":
-            #     print('[INFO]: Using fourier adapter experts')
-            #     block_experts = nn.ModuleList([GlobalRFFExpert(in_channels, in_channels) for _ in range(experts_per_block[b])])
-            # else:
-            #     raise ValueError(f"Unknown adapter_type: {args.adapter_type}")
             block_experts = get_block_experts(in_channels, experts_per_block, b, args)
             self.blocks.append(block_experts)
             self.gates.append(nn.Parameter(torch.ones(experts_per_block[b])) if experts_per_block[b] > 0 else None)
@@ -274,6 +273,14 @@ class ChainParallelFixed(nn.Module):
             # block_out = sum(expert(out) * gates[e_idx] for e_idx, expert in enumerate(block))
             # out = out + block_out
             out = out + self.scales[b_idx] * block_out
+
+            if hasattr(self, "_args") and hasattr(self._args, "gate_logger") and self._args.gate_logger:
+                self._args.gate_logger.record(
+                    block_idx=b_idx,
+                    gates=gates,
+                    labels=getattr(self._args.gate_logger, "current_labels", None)
+                )
+
             
         if hasattr(self, '_args'):
             ent_value = getattr(self._args, 'entropy_coeff', 1e-4) * gate_entropy(self.gates)
@@ -332,8 +339,15 @@ class ChainParallelInputDependent(nn.Module):
                     p = gates / (gates.sum(dim=1, keepdim=True) + 1e-8)
                     batch_ent = -(p * torch.log(p + 1e-8)).sum(dim=1).mean()                
                     ent_value = getattr(self._args, 'entropy_coeff', 1e-4) * batch_ent
-                    if not hasattr(self._args, 'gates_ent_loss'): self._args.gates_ent_loss = torch.tensor(0)
+                    if not hasattr(self._args, 'gates_ent_loss'): self._args.gates_ent_loss = 0.0 # torch.tensor(0)
                     self._args.gates_ent_loss -= ent_value # maximize entropy
+
+                    if hasattr(self._args, "gate_logger") and self._args.gate_logger:
+                        self._args.gate_logger.record(
+                            block_idx=b_idx,
+                            gates=gates,
+                            labels=getattr(self._args.gate_logger, "current_labels", None)
+                        )
                 
                 gates = gates.view(B, len(block), 1, 1, 1)  # [B, E, 1, 1, 1] for broadcasting
                 # Compute all expert outputs and stack
@@ -400,6 +414,13 @@ class ChainSequentialInputDependent(nn.Module):
                     ent_value = getattr(self._args, 'entropy_coeff', 1e-4) * batch_ent
                     if not hasattr(self._args, 'gates_ent_loss'): self._args.gates_ent_loss = 0.0 # torch.tensor(0)
                     self._args.gates_ent_loss -= ent_value # maximize entropy
+
+                    if hasattr(self._args, "gate_logger") and self._args.gate_logger:
+                        self._args.gate_logger.record(
+                            block_idx=b_idx,
+                            gates=gates,
+                            labels=getattr(self._args.gate_logger, "current_labels", None)
+                        )
                     
                 gates = gates.unsqueeze(-1).unsqueeze(-1)  # [B, num_experts, 1, 1]
             else:
