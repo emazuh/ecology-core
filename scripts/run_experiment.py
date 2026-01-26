@@ -1,3 +1,5 @@
+import os
+import wandb
 import argparse
 import yaml
 import optuna
@@ -8,6 +10,8 @@ import subprocess
 from hpo.objective import objective_adapter_layers
 from utilities.results import finalize_study_best_model
 
+
+USER = os.environ.get("USER", "unknown")
 
 # -------------------------
 # helpers
@@ -46,7 +50,10 @@ def make_run_name(task, dataset, model, adapter, fraction, seed):
 
 def run_layer_search(exp_cfg, args):
     task = exp_cfg["task"]
-    adapter = exp_cfg["adapter"]["chain_type"]
+    # adapter = exp_cfg["adapter"]["chain_type"]
+    adapter_type = exp_cfg["adapter"]["type"]
+    chain_type = exp_cfg["adapter"]["chain_type"]
+    adapter_name = f"{adapter_type}_{chain_type}"
     git_commit = get_git_commit()
     run_count = 0
 
@@ -59,7 +66,7 @@ def run_layer_search(exp_cfg, args):
                         task=task,
                         dataset=ds["name"],
                         model=model,
-                        adapter=adapter,
+                        adapter=adapter_name,
                         fraction=frac,
                         seed=seed,
                     )
@@ -68,7 +75,39 @@ def run_layer_search(exp_cfg, args):
                         print(run_name)
                         run_count += 1
                         continue
-    
+
+
+                    wandb_run = None
+                    if exp_cfg["logging"]["wandb"] and not args.dry_run:
+                        wandb_run = wandb.init(
+                            project=exp_cfg["logging"]["project"],
+                            name=run_name,
+                            group=exp_cfg["name"],        # 🔑 experiment-level
+                            job_type=exp_cfg["task"],
+                            tags=[
+                                "cvpr25",
+                                exp_cfg["task"],          # layer_search
+                                ds["name"],               # birds_inat
+                                model,                    # mobilevit
+                                adapter_type,        # bottleneck
+                                chain_type,          # par_fixed
+                                f"{int(frac * 100)}p",    # 5p, 10p, 25p
+                                USER,
+                            ],
+                            config={
+                                "experiment": exp_cfg["name"],
+                                "task": exp_cfg["task"],
+                                "dataset": ds["name"],
+                                "model": model,
+                                "fraction": frac,
+                                "adapter_type": adapter_type,
+                                "chain_type": chain_type,
+                                "seed": seed,
+                                "epochs": exp_cfg["hpo"]["epochs"],
+                            },
+                            reinit=True,
+                        )
+
                     study = optuna.create_study(
                         study_name=run_name,
                         direction="maximize",
@@ -79,11 +118,12 @@ def run_layer_search(exp_cfg, args):
                         lambda trial: objective_adapter_layers(
                             trial,
                             adapter_cfg=exp_cfg["adapter"]["config"],
+                            adapter_type=exp_cfg["adapter"].get("type"),
                             epochs=exp_cfg["hpo"]["epochs"],
                             model_name=model,
                             dataset_name=ds["name"],
                             data_subset=frac,
-                            chain_type=adapter,
+                            chain_type=chain_type,
                             log_wandb=exp_cfg["logging"]["wandb"],
                             wandb_project=exp_cfg["logging"]["project"],
                             seed=seed,
@@ -91,6 +131,10 @@ def run_layer_search(exp_cfg, args):
                         ),
                         n_trials=exp_cfg["hpo"]["n_trials"],
                     )
+
+                    if wandb_run is not None:
+                        wandb_run.summary["best_val_acc"] = study.best_value
+                        wandb.finish()
 
                     finalize_study_best_model(
                         study,

@@ -91,8 +91,8 @@ def objective_mlp(trial, adapter_cfg, seed=42, epochs=20, data_subset=0.1, datas
 
     # TODO: Search over these in stage 2
     hp["chain_type"] = chain_type
-    hp["B5_adapters"] = 1
-    hp["B6_adapters"] = 1
+    hp["B5_adapters"] = 4 #1
+    hp["B6_adapters"] = 4 #1
     hp["freeze_backbone"] = False # True
     
     mlp_reduction = 2 if trial is None else trial.suggest_categorical("mlp_reduction", [1, 2, 4, 8, 16, 32, 64])
@@ -162,8 +162,10 @@ def objective_mlp(trial, adapter_cfg, seed=42, epochs=20, data_subset=0.1, datas
     print("total_params", total_params)
     return val_acc, total_params
 
-def objective_adapter_layers(trial, adapter_cfg, seed=42, epochs=20, data_subset=0.1, dataset_name="birds_inat", model_name="mobilevit",
-                  log_wandb=True, chain_type="par_fixed", ds_grad_norm_file='birds_grad_norm_per_layer.csv', single_objective=False):
+def objective_adapter_layers(trial, adapter_cfg, adapter_type=None, seed=42, epochs=20, data_subset=0.1, 
+                             dataset_name="birds_inat", model_name="mobilevit", log_wandb=True, 
+                             chain_type="par_fixed", ds_grad_norm_file='birds_grad_norm_per_layer.csv', 
+                             single_objective=False, wandb_project="ecology-vision-moe"):
     set_global_seed(seed)
 
     # hp = suggest_stage1_hyperparameters(trial, epochs)
@@ -178,8 +180,12 @@ def objective_adapter_layers(trial, adapter_cfg, seed=42, epochs=20, data_subset
         hp["place_on"] = trial.suggest_categorical("place_on", ["mlp", "conv"])
         hp["layer_mode"] = trial.suggest_categorical("layer_mode", ["every", "all"])
 
-    hp["adapter_type"] = trial.suggest_categorical("adapter_type", ["simple", "fourier", "bottleneck"]) #  
-    adapter_type = hp["adapter_type"]
+    if adapter_type is None:
+        hp["adapter_type"] = trial.suggest_categorical("adapter_type", ["simple", "fourier", "bottleneck"]) #  
+        adapter_type = hp["adapter_type"]
+    else:
+        hp["adapter_type"] = adapter_type
+        
     entropy_coeff = hp["entropy_coeff"] = trial.suggest_categorical("entropy_coeff", [ 0.1,  1e-2, 1e-3]) # # -1e-2, , -1e-3 -0.1, 
     
     # TODO: Search over these in stage 2
@@ -214,6 +220,7 @@ def objective_adapter_layers(trial, adapter_cfg, seed=42, epochs=20, data_subset
     # train_loader, val_loader, args = get_subset_dataloaders(subset_fraction=data_subset, dataset_name=dataset_name,
     #                                                        randerase_p=randerase_p)
     # args.num_classes = NUM_CLASSES
+    args.reduction = 2
     args.warmup_ratio = trial.suggest_float("warmup_ratio", 0.0, 0.1)
     args.batch_size = batch_size
     args.dropout_rate = dropout
@@ -232,35 +239,62 @@ def objective_adapter_layers(trial, adapter_cfg, seed=42, epochs=20, data_subset
 
     # Notes: backbone_mlp_reduction2 tag for conv/mlp adapters per difference
     # backbone_mlp_reduction3 tag for b5/b6 adapter experts fan out
-    if log_wandb:
-        wandb.init(
-            entity="ecology-multimodal-2026",
-            project="ecology-vision-moe",
-            reinit=True,
-            config={
+    # if log_wandb:
+    #     USER = os.environ['USER']
+    #     wandb.init(
+    #         entity="ecology-multimodal-2026",
+    #         project=wandb_project,
+    #         reinit=True,
+    #         config={
+    #             "lr": round(lr, 4),
+    #             "dropout": round(dropout, 2),
+    #             "randerase_p": round(randerase_p, 2),
+    #             "batch_size": batch_size,
+    #             "data_subset": data_subset,
+    #             "dataset_name": dataset_name,
+    #             "weight_decay": weight_decay,
+    #             "mlp_reduction": mlp_reduction,
+    #             "place_on": place_on,
+    #             "layer_mode": layer_mode,
+    #             "adapter_type": adapter_type,
+    #             "epochs": epochs,
+    #             "B5_adapters": hp["B5_adapters"],
+    #             "B6_adapters": hp["B6_adapters"],
+    #             "adapter_start_epoch": adapter_start_epoch,
+    #             "model_name": model_name,
+    #             "entropy_coeff": entropy_coeff,
+    #             "adapter_start_epoch": adapter_start_epoch,
+    #             "freeze_backbone": freeze_backbone
+                
+    #         },
+    #         tags=["cvpr25optuna_birdsmvit", "backbone_mlp_reduction3", f"{dataset_name}_{100*data_subset}p", USER]
+    #     )
+
+    if log_wandb and wandb.run is not None:
+        wandb.config.update(
+            {
+                # trial-specific hyperparams
+                "adapter_type": adapter_type,
+                "entropy_coeff": entropy_coeff,
+                "B5_adapters": hp["B5_adapters"],
+                "B6_adapters": hp["B6_adapters"],
+                "freeze_backbone": freeze_backbone,
+                "adapter_start_epoch": adapter_start_epoch,
+                "place_on": place_on,
+                "layer_mode": layer_mode,
+
                 "lr": round(lr, 4),
                 "dropout": round(dropout, 2),
                 "randerase_p": round(randerase_p, 2),
                 "batch_size": batch_size,
-                "data_subset": data_subset,
-                "dataset_name": dataset_name,
                 "weight_decay": weight_decay,
                 "mlp_reduction": mlp_reduction,
-                "place_on": place_on,
-                "layer_mode": layer_mode,
-                "adapter_type": adapter_type,
-                "epochs": epochs,
-                "B5_adapters": hp["B5_adapters"],
-                "B6_adapters": hp["B6_adapters"],
-                "adapter_start_epoch": adapter_start_epoch,
-                "model_name": model_name,
-                "entropy_coeff": entropy_coeff,
-                "adapter_start_epoch": adapter_start_epoch,
-                "freeze_backbone": freeze_backbone
-                
             },
-            tags=["cvpr25optuna_birdsmvit", "backbone_mlp_reduction3", f"{dataset_name}_{100*data_subset}p"]
+            allow_val_change=True,  # 🔑 critical
         )
+
+
+    
     # Model setup
     # model = timm.create_model('mobilevitv2_050.cvnets_in1k', pretrained=True, num_classes=args.num_classes, drop_rate=dropout)
     model = get_model(args)
@@ -285,13 +319,23 @@ def objective_adapter_layers(trial, adapter_cfg, seed=42, epochs=20, data_subset
         last2_adapters, last1_adapters = hp["B5_adapters"], hp["B6_adapters"]
         trial_name = f"B5{last2_adapters}_B6{last1_adapters}_lr{lr:.1e}_do{dropout:.2f}_freeze{freeze_backbone}"
         wandb.config.update({"trial_name": trial_name,
-                             "total_params": total_params})
-        wandb.log({"val_acc": val_acc})
+                             "total_params": total_params}, allow_val_change=True)
+        # wandb.log({"val_acc": val_acc})
+        wandb.log(
+            {
+                "val_acc": val_acc,
+                "total_params": total_params,
+                "trial_number": trial.number,
+            },
+            step=trial.number,   # 🔑 trial index
+        )
+
     except optuna.TrialPruned:
-        wandb.log({"status": "pruned"})
+        # wandb.log({"status": "pruned"})
+        wandb.log({"pruned": 1}, step=trial.number)
         raise
-    finally:
-        wandb.finish()
+    # finally:
+    #     wandb.finish()
     if single_objective:
         return val_acc
     return val_acc, total_params

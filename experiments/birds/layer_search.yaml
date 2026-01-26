@@ -14,7 +14,7 @@ adapter:
   config: null
 
 hpo:
-  n_trials: 10
+  n_trials: 40
   epochs: 20
   objective: accuracy
   pruner:
