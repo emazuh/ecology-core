@@ -1,0 +1,21 @@
+task: layer_search
+
+models:
+  - mobilevit
+  - efficientformer
+
+hpo:
+  n_trials: 5
+  epochs: 5
+  objective: accuracy
+  pruner:
+    type: percentile
+    percentile: 15
+    warmup_steps: 5
+
+logging:
+  wandb: true
+  project: ecology-vision-moe
+  entity: ecology-multimodal-2026
+
+seeds: [0]
